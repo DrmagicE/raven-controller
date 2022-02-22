@@ -1,0 +1,114 @@
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.4.1
+  creationTimestamp: null
+  name: gateways.raven.openyurt.io
+spec:
+  group: raven.openyurt.io
+  names:
+    kind: Gateway
+    listKind: GatewayList
+    plural: gateways
+    singular: gateway
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.activeEndpoint.nodeName
+      name: ActiveEndpoint
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Gateway is the Schema for the gateways API
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation
+              of an object. Servers should convert recognized schemas to the latest
+              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this
+              object represents. Servers may infer this from the endpoint the client
+              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: GatewaySpec defines the desired state of Gateway
+            properties:
+              nodePool:
+                description: NodePool is the name of the nodepool which the Gateway
+                  belongs to.
+                type: string
+              topologies:
+                description: Topologies represents which topologies the Gateway is
+                  participated in.
+                items:
+                  description: Topology represents the VPN topology. Raven will only
+                    establish VPN between the gateways in the same topology.
+                  properties:
+                    name:
+                      description: Name is the name of the topology.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+            required:
+            - nodePool
+            - topologies
+            type: object
+          status:
+            description: GatewayStatus defines the observed state of Gateway
+            properties:
+              activeEndpoint:
+                description: ActiveEndpoint is the reference of the active endpoint.
+                properties:
+                  backend:
+                    type: string
+                  backendConfig:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  natEnabled:
+                    type: boolean
+                  nodeName:
+                    description: NodeName is the name of the node that the endpoint
+                      belongs to.
+                    type: string
+                  nodePool:
+                    description: NodePool is the name of the node pool that the endpoint
+                      belongs to.
+                    type: string
+                  privateIP:
+                    type: string
+                  publicIP:
+                    type: string
+                required:
+                - backend
+                - nodeName
+                - nodePool
+                - privateIP
+                - publicIP
+                type: object
+              subnets:
+                description: Subnets contains all the subnets in the gateway.
+                items:
+                  type: string
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+status:
+  acceptedNames:
+    kind: ""
+    plural: ""
+  conditions: []
+  storedVersions: []

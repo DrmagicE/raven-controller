@@ -1,0 +1,60 @@
+---
+apiVersion: raven.openyurt.io/v1alpha1
+kind: Endpoint
+metadata:
+  name: guangzhou
+spec:
+  nodePool: guangzhou
+  nodeName: guangzhou-worker-1
+  privateIP: 192.168.1.2
+  publicIP: 222.1.2.3
+  backend: ipsec
+---
+apiVersion: raven.openyurt.io/v1alpha1
+kind: Endpoint
+metadata:
+  name: shenzhen
+spec:
+  nodePool: shenzhen
+  nodeName: shenzhen-worker-1
+  privateIP: 192.168.1.2
+  publicIP: 222.1.2.4
+  backend: ipsec
+---
+apiVersion: raven.openyurt.io/v1alpha1
+kind: Endpoint
+metadata:
+  name: shenzhen-2
+spec:
+  nodePool: shenzhen
+  nodeName: shenzhen-worker-2
+  privateIP: 192.168.1.3
+  publicIP: 222.1.2.4
+  backend: ipsec
+---
+apiVersion: raven.openyurt.io/v1alpha1
+kind: Gateway
+metadata:
+  # 广州的Gateway
+  name: guangzhou
+  labels:
+    # gateway属于哪个topology，根据topologies字段自动打上
+    topology.raven.openyurt.io/region-south: ""
+spec:
+  # 哪个节点池的gateway
+  nodePool: guangzhou
+  # 该Gateway在哪个拓扑里。
+  topologies:
+    - name: region-south-3
+---
+apiVersion: raven.openyurt.io/v1alpha1
+kind: Gateway
+metadata:
+  # 深圳的Gateway
+  name: shenzhen
+  labels:
+    topology.raven.openyurt.io/region-south: ""
+spec:
+  nodePool: shenzhen
+  topologies:
+    - name: region-south-2

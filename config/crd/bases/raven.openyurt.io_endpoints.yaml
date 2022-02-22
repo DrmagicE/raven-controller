@@ -1,0 +1,85 @@
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.4.1
+  creationTimestamp: null
+  name: endpoints.raven.openyurt.io
+spec:
+  group: raven.openyurt.io
+  names:
+    kind: Endpoint
+    listKind: EndpointList
+    plural: endpoints
+    singular: endpoint
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.NodeName
+      name: NodeName
+      type: string
+    - jsonPath: .spec.PrivateIP
+      name: PrivateIP
+      type: string
+    - jsonPath: .spec.PublicIP
+      name: PublicIP
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Endpoint is the Schema for the endpoints API
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation
+              of an object. Servers should convert recognized schemas to the latest
+              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this
+              object represents. Servers may infer this from the endpoint the client
+              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: EndpointSpec defines the desired state of Endpoint
+            properties:
+              backend:
+                type: string
+              backendConfig:
+                additionalProperties:
+                  type: string
+                type: object
+              natEnabled:
+                type: boolean
+              nodeName:
+                description: NodeName is the name of the node that the endpoint belongs
+                  to.
+                type: string
+              nodePool:
+                description: NodePool is the name of the node pool that the endpoint
+                  belongs to.
+                type: string
+              privateIP:
+                type: string
+              publicIP:
+                type: string
+            required:
+            - backend
+            - nodeName
+            - nodePool
+            - privateIP
+            - publicIP
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources: {}
+status:
+  acceptedNames:
+    kind: ""
+    plural: ""
+  conditions: []
+  storedVersions: []
