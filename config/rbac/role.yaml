@@ -7,16 +7,6 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
-  - apps.openyurt.io
-  resources:
-  - nodepools
-  verbs:
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
   - ""
   resources:
   - nodes

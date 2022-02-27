@@ -3,23 +3,18 @@ layout:
 - go.kubebuilder.io/v3
 projectName: raven-controller-manager
 repo: github.com/openyurtio/raven-controller-manager
+multigroup: true
 resources:
 - api:
     crdVersion: v1
-    namespaced: true
+    namespaced: false
   controller: true
   domain: openyurt.io
   group: raven
   kind: Gateway
-  path: github.com/openyurtio/raven-controller-manager/api/v1alpha1
+  path: github.com/openyurtio/raven-controller-manager/pkg/ravencontroller/apis/raven/v1alpha1
   version: v1alpha1
-- api:
-    crdVersion: v1
-    namespaced: true
-  controller: true
-  domain: openyurt.io
-  group: raven
-  kind: Endpoint
-  path: github.com/openyurtio/raven-controller-manager/api/v1alpha1
-  version: v1alpha1
-version: "3"
+  webhooks:
+    defaulting: true
+    validation: true
+    webhookVersion: v1

@@ -40,27 +40,87 @@ spec:
           spec:
             description: GatewaySpec defines the desired state of Gateway
             properties:
-              nodePool:
-                description: NodePool is the name of the nodepool which the Gateway
-                  belongs to.
+              backend:
+                description: Backend is the VPN tunnel implementation, only "libreswan"
+                  is supported currently.
                 type: string
-              topologies:
-                description: Topologies represents which topologies the Gateway is
-                  participated in.
+              endpoints:
+                description: TODO add a configuration field to configure using vxlan
+                  or host-gw for inner gateway communication? Endpoints is a list
+                  of available Endpoint.
                 items:
-                  description: Topology represents the VPN topology. Raven will only
-                    establish VPN between the gateways in the same topology.
+                  description: Endpoint stores all essential data for establishing
+                    the VPN tunnel. TODO add priority filed?
                   properties:
-                    name:
-                      description: Name is the name of the topology.
+                    config:
+                      additionalProperties:
+                        type: string
+                      type: object
+                    natEnabled:
+                      type: boolean
+                    nodeName:
+                      description: NodeName represents the node the Endpoint belongs
+                        to.
+                      type: string
+                    privateIP:
+                      type: string
+                    publicIP:
                       type: string
                   required:
-                  - name
+                  - nodeName
+                  - privateIP
+                  - publicIP
                   type: object
                 type: array
+              nodeSelector:
+                description: NodeSelector is a label query over nodes that managed
+                  by the gateway. The nodes in the same gateway should share same
+                  layer 3 network.
+                properties:
+                  matchExpressions:
+                    description: matchExpressions is a list of label selector requirements.
+                      The requirements are ANDed.
+                    items:
+                      description: A label selector requirement is a selector that
+                        contains values, a key, and an operator that relates the key
+                        and values.
+                      properties:
+                        key:
+                          description: key is the label key that the selector applies
+                            to.
+                          type: string
+                        operator:
+                          description: operator represents a key's relationship to
+                            a set of values. Valid operators are In, NotIn, Exists
+                            and DoesNotExist.
+                          type: string
+                        values:
+                          description: values is an array of string values. If the
+                            operator is In or NotIn, the values array must be non-empty.
+                            If the operator is Exists or DoesNotExist, the values
+                            array must be empty. This array is replaced during a strategic
+                            merge patch.
+                          items:
+                            type: string
+                          type: array
+                      required:
+                      - key
+                      - operator
+                      type: object
+                    type: array
+                  matchLabels:
+                    additionalProperties:
+                      type: string
+                    description: matchLabels is a map of {key,value} pairs. A single
+                      {key,value} in the matchLabels map is equivalent to an element
+                      of matchExpressions, whose key field is "key", the operator
+                      is "In", and the values array contains only "value". The requirements
+                      are ANDed.
+                    type: object
+                type: object
             required:
-            - nodePool
-            - topologies
+            - backend
+            - endpoints
             type: object
           status:
             description: GatewayStatus defines the observed state of Gateway
@@ -68,30 +128,22 @@ spec:
               activeEndpoint:
                 description: ActiveEndpoint is the reference of the active endpoint.
                 properties:
-                  backend:
-                    type: string
-                  backendConfig:
+                  config:
                     additionalProperties:
                       type: string
                     type: object
                   natEnabled:
                     type: boolean
                   nodeName:
-                    description: NodeName is the name of the node that the endpoint
-                      belongs to.
-                    type: string
-                  nodePool:
-                    description: NodePool is the name of the node pool that the endpoint
-                      belongs to.
+                    description: NodeName represents the node the Endpoint belongs
+                      to.
                     type: string
                   privateIP:
                     type: string
                   publicIP:
                     type: string
                 required:
-                - backend
                 - nodeName
-                - nodePool
                 - privateIP
                 - publicIP
                 type: object

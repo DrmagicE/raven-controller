@@ -18,21 +18,26 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
-	_ "k8s.io/client-go/plugin/pkg/client/auth"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientset "k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	ravenv1alpha1 "github.com/openyurtio/raven-controller-manager/api/v1alpha1"
-	"github.com/openyurtio/raven-controller-manager/controllers"
+	ravenv1alpha1 "github.com/openyurtio/raven-controller-manager/pkg/ravencontroller/apis/raven/v1alpha1"
+	"github.com/openyurtio/raven-controller-manager/pkg/ravencontroller/controllers"
+	"github.com/openyurtio/raven-controller-manager/pkg/webhook/util"
+	webhookcontroller "github.com/openyurtio/raven-controller-manager/pkg/webhook/util/controller"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -70,11 +75,13 @@ func main() {
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
+		Host:                   "127.0.0.1",
 		MetricsBindAddress:     metricsAddr,
 		Port:                   9443,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "2511aa10.openyurt.io",
+		CertDir:                util.GetCertDir(),
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -89,6 +96,20 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "Gateway")
 		os.Exit(1)
 	}
+	if err = (&ravenv1alpha1.Gateway{}).SetupWebhookWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "Gateway")
+		os.Exit(1)
+	}
+	if err != nil {
+		setupLog.Error(err, "unable to initialize webhook")
+		os.Exit(1)
+	}
+	stopCh := ctrl.SetupSignalHandler()
+	err = InitializeWebhook(mgr, stopCh.Done())
+	if err != nil {
+		setupLog.Error(err, "problem initializing webhook")
+		os.Exit(1)
+	}
 	//+kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
@@ -101,8 +122,38 @@ func main() {
 	}
 
 	setupLog.Info("starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(stopCh); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
+	}
+}
+
+func InitializeWebhook(mgr ctrl.Manager, stopCh <-chan struct{}) error {
+	cli, err := client.NewDelegatingClient(client.NewDelegatingClientInput{
+		CacheReader: mgr.GetAPIReader(),
+		Client:      mgr.GetClient(),
+	})
+	if err != nil {
+		return err
+	}
+	kubeCli, err := clientset.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		return err
+	}
+	c, err := webhookcontroller.New(cli, kubeCli)
+	if err != nil {
+		return err
+	}
+	go func() {
+		c.Start(stopCh)
+	}()
+
+	timer := time.NewTimer(time.Second * 5)
+	defer timer.Stop()
+	select {
+	case <-webhookcontroller.Inited():
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("failed to start webhook controller for waiting more than 5s")
 	}
 }
