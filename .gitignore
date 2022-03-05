@@ -7,6 +7,9 @@
 *.dylib
 bin
 testbin/*
+_output
+dockerbuild
+localenv
 
 # Test binary, build with `go test -c`
 *.test

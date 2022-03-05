@@ -35,19 +35,18 @@ all: build
 help: ## Display this help.
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
-##@ Development
 
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	$(CONTROLLER_GEN) $(CRD_OPTIONS) rbac:roleName=manager-role webhook paths="./pkg/ravencontroller/..." output:crd:artifacts:config=config/crd/bases
+	$(CONTROLLER_GEN) $(CRD_OPTIONS) rbac:roleName=manager-role webhook paths="./pkg/ravencontroller/..." output:crd:artifacts:config=config/raven-controller-manager/crd/bases  output:rbac:artifacts:config=config/raven-controller-manager/rbac output:webhook:artifacts:config=config/raven-controller-manager/webhook
+
+generate: controller-gen generate-goclient ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
+	$(CONTROLLER_GEN) object:headerFile="pkg/ravencontroller/hack/boilerplate.go.txt" paths="./..."
 
 
 
-generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
-	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
-
-
-generate-goclient: controller-gen
-	hack/generate_client.sh
+generate-goclient: controller-gen ## Generate go codes.
+	hack/make-rules/generate_client.sh
+	$(CONTROLLER_GEN) object:headerFile="./pkg/ravencontroller/hack/boilerplate.go.txt" paths="./pkg/ravencontroller/apis/..."
 
 
 fmt: ## Run go fmt against code.
@@ -56,41 +55,24 @@ fmt: ## Run go fmt against code.
 vet: ## Run go vet against code.
 	go vet ./...
 
-ENVTEST_ASSETS_DIR=$(shell pwd)/testbin
-test: manifests generate fmt vet ## Run tests.
-	mkdir -p ${ENVTEST_ASSETS_DIR}
-	test -f ${ENVTEST_ASSETS_DIR}/setup-envtest.sh || curl -sSLo ${ENVTEST_ASSETS_DIR}/setup-envtest.sh https://raw.githubusercontent.com/kubernetes-sigs/controller-runtime/v0.7.2/hack/setup-envtest.sh
-	source ${ENVTEST_ASSETS_DIR}/setup-envtest.sh; fetch_envtest_tools $(ENVTEST_ASSETS_DIR); setup_envtest_env $(ENVTEST_ASSETS_DIR); go test ./... -coverprofile cover.out
+test: fmt vet ## Run test
+	go test ./... -coverprofile cover.out
 
-##@ Build
+build: generate
+	bash hack/make-rules/build.sh
 
-build: generate fmt vet ## Build manager binary.
-	go build -o bin/manager main.go
+release:
+	bash hack/make-rules/release-images.sh
 
-run: manifests generate fmt vet ## Run a controller from your host.
-	go run ./main.go
+generate-deploy-yaml:
+	hack/make-rules/genyaml.sh
 
-docker-build: test ## Build docker image with the manager.
-	docker build -t ${IMG} .
+push:
+	bash hack/make-rules/push-images.sh
 
-docker-push: ## Push docker image with the manager.
-	docker push ${IMG}
-
-##@ Deployment
-
-install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/config.
-	$(KUSTOMIZE) build config/crd | kubectl apply -f -
-
-uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config.
-	$(KUSTOMIZE) build config/crd | kubectl delete -f -
-
-deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
-	$(KUSTOMIZE) build config/default | kubectl apply -f -
-
-undeploy: ## Undeploy controller from the K8s cluster specified in ~/.kube/config.
-	$(KUSTOMIZE) build config/default | kubectl delete -f -
-
+clean:
+	-rm -Rf _output
+	-rm -Rf dockerbuild
 
 CONTROLLER_GEN = $(shell pwd)/bin/controller-gen
 controller-gen: ## Download controller-gen locally if necessary.

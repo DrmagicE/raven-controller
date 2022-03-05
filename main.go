@@ -1,5 +1,5 @@
 /*
-Copyright 2022.
+Copyright 2022 The OpenYurt Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,26 +18,21 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"os"
-	"time"
-
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	clientset "k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
+	klogv2 "k8s.io/klog/v2"
+	"k8s.io/klog/v2/klogr"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	ravenv1alpha1 "github.com/openyurtio/raven-controller-manager/pkg/ravencontroller/apis/raven/v1alpha1"
 	"github.com/openyurtio/raven-controller-manager/pkg/ravencontroller/controllers"
-	"github.com/openyurtio/raven-controller-manager/pkg/webhook/util"
-	webhookcontroller "github.com/openyurtio/raven-controller-manager/pkg/webhook/util/controller"
+	ravenwebhook "github.com/openyurtio/raven-controller-manager/pkg/ravencontroller/webhook"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -63,25 +58,17 @@ func main() {
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
 
-	//klogv2.InitFlags(flag.CommandLine)
-	opts := zap.Options{
-		Development: true,
-	}
-	opts.BindFlags(flag.CommandLine)
+	klogv2.InitFlags(flag.CommandLine)
 	flag.Parse()
 
-	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
-	//ctrl.SetLogger(klogr.New())
+	ctrl.SetLogger(klogr.New())
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
-		Host:                   "127.0.0.1",
 		MetricsBindAddress:     metricsAddr,
-		Port:                   9443,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "2511aa10.openyurt.io",
-		CertDir:                util.GetCertDir(),
+		LeaderElectionID:       "raven-controller-manager",
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -105,7 +92,7 @@ func main() {
 		os.Exit(1)
 	}
 	stopCh := ctrl.SetupSignalHandler()
-	err = InitializeWebhook(mgr, stopCh.Done())
+	err = ravenwebhook.Initialize(mgr, stopCh.Done())
 	if err != nil {
 		setupLog.Error(err, "problem initializing webhook")
 		os.Exit(1)
@@ -125,35 +112,5 @@ func main() {
 	if err := mgr.Start(stopCh); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
-	}
-}
-
-func InitializeWebhook(mgr ctrl.Manager, stopCh <-chan struct{}) error {
-	cli, err := client.NewDelegatingClient(client.NewDelegatingClientInput{
-		CacheReader: mgr.GetAPIReader(),
-		Client:      mgr.GetClient(),
-	})
-	if err != nil {
-		return err
-	}
-	kubeCli, err := clientset.NewForConfig(mgr.GetConfig())
-	if err != nil {
-		return err
-	}
-	c, err := webhookcontroller.New(cli, kubeCli)
-	if err != nil {
-		return err
-	}
-	go func() {
-		c.Start(stopCh)
-	}()
-
-	timer := time.NewTimer(time.Second * 5)
-	defer timer.Stop()
-	select {
-	case <-webhookcontroller.Inited():
-		return nil
-	case <-timer.C:
-		return fmt.Errorf("failed to start webhook controller for waiting more than 5s")
 	}
 }

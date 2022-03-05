@@ -1,5 +1,5 @@
 /*
-Copyright 2022.
+Copyright 2022 The OpenYurt Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -41,12 +42,14 @@ import (
 // GatewayReconciler reconciles a Gateway object
 type GatewayReconciler struct {
 	client.Client
-	Log    logr.Logger
-	Scheme *runtime.Scheme
+	Log      logr.Logger
+	Scheme   *runtime.Scheme
+	recorder record.EventRecorder
 }
 
 //+kubebuilder:rbac:groups=raven.openyurt.io,resources=gateways,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=raven.openyurt.io,resources=gateways/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=core,resources=events,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=raven.openyurt.io,resources=gateways/finalizers,verbs=update
 //+kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch;update;patch
 
@@ -62,11 +65,9 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}()
 	var gw ravenv1alpha1.Gateway
 	if err := r.Get(ctx, req.NamespacedName, &gw); err != nil {
-		if !apierrs.IsNotFound(err) {
-			log.Error(err, "unable to fetch Gateway")
-		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+
 	// get all managed nodes
 	var nodeList corev1.NodeList
 	nodeSelector, err := labels.Parse(fmt.Sprintf(ravenv1alpha1.LabelCurrentGateway+"=%s", gw.Name))
@@ -81,33 +82,20 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
-	// 1. try to select an active endpoint if possible
-	err = r.setActiveEndpoint(nodeList, &gw)
-	if err != nil {
-		log.Error(err, "unable to set active endpoint")
-		return ctrl.Result{}, err
-	}
-	if log.V(4).Enabled() {
-		if gw.Status.ActiveEndpoint != nil {
-			log.V(4).Info("active endpoint selected", "activeEndpoint", gw.Status.ActiveEndpoint.NodeName)
-		} else {
-			log.V(4).Info("unable to select active endpoint")
-		}
-	}
+	// 1. try to elect an active endpoint if possible
+	activeEp := r.electActiveEndpoint(nodeList, &gw)
+	r.recordEndpointEvent(ctx, &gw, gw.Status.ActiveEndpoint, activeEp)
+	gw.Status.ActiveEndpoint = activeEp
 
 	// 2. get subnet list of all nodes managed by the Gateway
 	var subnets []string
 	for _, v := range nodeList.Items {
 		subnets = append(subnets, v.Spec.PodCIDR)
 	}
-	if err != nil {
-		log.Error(err, "unable to get subnets")
-		return ctrl.Result{}, err
-	}
-	log.V(4).Info("get subnet list", "subnets", subnets)
+	log.V(4).Info("managed subnet list", "subnets", subnets)
 	gw.Status.Subnets = subnets
 
-	// 3. add region labels to relevant nodes.
+	// 3. add region labels to all managed nodes.
 	err = r.ensureRegionLabelForNodes(ctx, nodeList, &gw)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -122,22 +110,42 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return ctrl.Result{}, nil
 }
 
-// ensureTopologyLabels ensures the topology label in the labels is consist with the given topologies.
-func ensureTopologyLabels(labels map[string]string, topologies map[string]string) {
-	for k := range labels {
-		if ravenv1alpha1.IsTopologyLabel(k) {
-			delete(labels, k)
-		}
+func (r *GatewayReconciler) recordEndpointEvent(ctx context.Context, sourceObj *ravenv1alpha1.Gateway, previous, current *ravenv1alpha1.Endpoint) {
+	log := log.FromContext(ctx)
+	if current != nil && !reflect.DeepEqual(previous, current) {
+		r.recorder.Event(sourceObj.DeepCopy(), corev1.EventTypeNormal,
+			ravenv1alpha1.EventActiveEndpointElected,
+			fmt.Sprintf("The endpoint hosted by node %s has been elected active endpoint, privateIP: %s, publicIP: %s", current.NodeName, current.PrivateIP, current.PublicIP))
+		log.V(2).Info("elected new active endpoint", "nodeName", current.NodeName, "privateIP", current.PrivateIP, "publicIP", current.PublicIP)
+		return
 	}
-	for k, v := range topologies {
-		labels[k] = v
+	if current == nil && previous != nil {
+		r.recorder.Event(sourceObj.DeepCopy(), corev1.EventTypeWarning,
+			ravenv1alpha1.EventActiveEndpointLost,
+			fmt.Sprintf("The active endpoint hosted by node %s was lost, privateIP: %s, publicIP: %s", previous.NodeName, previous.PrivateIP, previous.PublicIP))
+		log.V(2).Info("active endpoint lost", "nodeName", previous.NodeName, "privateIP", previous.PrivateIP, "publicIP", previous.PublicIP)
+		return
 	}
 }
 
-// setActiveEndpoint will trys to select an active Endpoint and set it into gw.Status.ActiveEndpoint.
-// If the current active endpoint remains competent, then we don't change it.
-// Otherwise, try to select a new one.
-func (r *GatewayReconciler) setActiveEndpoint(nodeList corev1.NodeList, gw *ravenv1alpha1.Gateway) (err error) {
+// ensureTopologyLabels ensures the topology labels source are consist with the given topologies.
+func ensureTopologyLabels(source map[string]string, topologies map[string]string) {
+	// cleanup first
+	for k := range source {
+		if ravenv1alpha1.IsTopologyLabel(k) {
+			delete(source, k)
+		}
+	}
+	// refill
+	for k, v := range topologies {
+		source[k] = v
+	}
+}
+
+// electActiveEndpoint trys to elect an active Endpoint.
+// If the current active endpoint remains valid, then we don't change it.
+// Otherwise, try to elect a new one.
+func (r *GatewayReconciler) electActiveEndpoint(nodeList corev1.NodeList, gw *ravenv1alpha1.Gateway) (ep *ravenv1alpha1.Endpoint) {
 	// get all ready nodes referenced by endpoints
 	readyNodes := make(map[string]corev1.Node)
 	for _, v := range nodeList.Items {
@@ -145,7 +153,7 @@ func (r *GatewayReconciler) setActiveEndpoint(nodeList corev1.NodeList, gw *rave
 			readyNodes[v.Name] = v
 		}
 	}
-	// checkActive return if the given ep can be elected as an active endpoint.
+	// checkActive check if the given endpoint is able to become the active endpoint.
 	checkActive := func(ep *ravenv1alpha1.Endpoint) bool {
 		if ep == nil {
 			return false
@@ -164,29 +172,22 @@ func (r *GatewayReconciler) setActiveEndpoint(nodeList corev1.NodeList, gw *rave
 		}
 		return false
 	}
+
+	// the current active endpoint is still competent.
 	if checkActive(gw.Status.ActiveEndpoint) {
-		return nil
+		return gw.Status.ActiveEndpoint.DeepCopy()
 	}
-	gw.Status.ActiveEndpoint = nil
-	// try to select an active endpoint.
+
+	// try to elect an active endpoint.
 	for _, v := range gw.Spec.Endpoints {
 		if checkActive(&v) {
-			gw.Status.ActiveEndpoint = &ravenv1alpha1.Endpoint{
-				NodeName:   v.NodeName,
-				PrivateIP:  v.PrivateIP,
-				PublicIP:   v.PublicIP,
-				NATEnabled: v.NATEnabled,
-				Config:     map[string]string{},
-			}
-			for ck, cv := range v.Config {
-				gw.Status.ActiveEndpoint.Config[ck] = cv
-			}
-			return
+			return v.DeepCopy()
 		}
 	}
 	return
 }
 
+// ensureRegionLabelForNodes ensure the region labels of nodes that are managed by the Gateway are consist with the Gateway。
 func (r *GatewayReconciler) ensureRegionLabelForNodes(ctx context.Context, nodeList corev1.NodeList, gw *ravenv1alpha1.Gateway) error {
 	topologies := make(map[string]string)
 	for k, v := range gw.Labels {
@@ -207,16 +208,6 @@ func (r *GatewayReconciler) ensureRegionLabelForNodes(ctx context.Context, nodeL
 		}
 	}
 	return nil
-}
-
-// SetupWithManager sets up the controller with the Manager.
-func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).For(&ravenv1alpha1.Gateway{}).
-		Watches(
-			&source.Kind{Type: &corev1.Node{}},
-			handler.EnqueueRequestsFromMapFunc(r.mapNodeToRequest),
-			builder.WithPredicates(NodeChangedPredicates{log: r.Log}),
-		).Complete(r)
 }
 
 // mapNodeToRequest maps the given Node object to reconcile.Request.
@@ -266,4 +257,15 @@ func getNodeCondition(status *corev1.NodeStatus, conditionType corev1.NodeCondit
 		}
 	}
 	return -1, nil
+}
+
+// SetupWithManager sets up the controller with the Manager.
+func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.recorder = mgr.GetEventRecorderFor("Gateway")
+	return ctrl.NewControllerManagedBy(mgr).For(&ravenv1alpha1.Gateway{}).
+		Watches(
+			&source.Kind{Type: &corev1.Node{}},
+			handler.EnqueueRequestsFromMapFunc(r.mapNodeToRequest),
+			builder.WithPredicates(NodeChangedPredicates{log: r.Log}),
+		).Complete(r)
 }
